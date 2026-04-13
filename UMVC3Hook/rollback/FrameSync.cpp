@@ -1,6 +1,7 @@
 #include "FrameSync.h"
 #include "Memory.h"
 #include "Addresses.h"
+#include "StateSnapshot.h"
 #include "../utils/addr.h"
 #include <windows.h>
 
@@ -18,6 +19,9 @@ using InputFuncPtr = void(__fastcall*)(long long*);
 static InputFuncPtr g_originalInputFunc = nullptr;
 
 static void __fastcall FrameBoundaryHookFn(long long* param_1) {
+    // param_1 IS the input buffer base pointer — cache it for snapshot use
+    SetInputBufferBase(reinterpret_cast<uint64_t>(param_1));
+
     g_frameBoundaryCount.fetch_add(1, std::memory_order_release);
 
     // Call the original input function

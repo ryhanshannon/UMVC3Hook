@@ -88,4 +88,8 @@ bool LoadSnapshot(const GameSnapshot& snapshot);
 // Uses FNV-1a over the concatenated state bytes.
 uint64_t ChecksumSnapshot(const GameSnapshot& snapshot);
 
+// Called by FrameSync to cache the input buffer base address
+// discovered from the frame boundary hook's parameter.
+void SetInputBufferBase(uint64_t addr);
+
 } // namespace umvc3

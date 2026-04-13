@@ -1,5 +1,6 @@
 #include "StateSnapshot.h"
 #include "../utils/addr.h"
+#include <atomic>
 
 namespace umvc3 {
 
@@ -43,13 +44,32 @@ static bool ResolveRngSeedRegion(uint64_t* stateAddr, uint64_t* seedAddr) {
     return true;
 }
 
+// The input buffer base is discovered at runtime by the frame boundary hook.
+// The research DLL caches it in an atomic after the first hook fire.
+// We replicate this: FrameSync sets it, we read it here.
+static std::atomic<uint64_t> g_inputBufferBase{0};
+
+void SetInputBufferBase(uint64_t addr) {
+    g_inputBufferBase.store(addr, std::memory_order_release);
+}
+
 static bool ResolveInputBase(uint64_t* outBase) {
-    // Input buffer base: read from the InputDisplay pointer chain.
-    // InputDisplay -> points to a region containing P1 input buffer.
+    // Primary: use the cached address from the frame boundary hook
+    uint64_t cached = g_inputBufferBase.load(std::memory_order_acquire);
+    if (cached != 0 && IsReadable(cached, INPUT_BUFFER_SIZE)) {
+        *outBase = cached;
+        return true;
+    }
+
+    // Fallback: try InputDisplay pointer chain
     uint64_t displayPtr = 0;
-    if (!ReadStaticPointer(ADDR_InputDisplay, &displayPtr)) return false;
-    *outBase = displayPtr;
-    return true;
+    if (ReadStaticPointer(ADDR_InputDisplay, &displayPtr) &&
+        IsReadable(displayPtr, INPUT_BUFFER_SIZE)) {
+        *outBase = displayPtr;
+        return true;
+    }
+
+    return false;
 }
 
 // ---- Collision table capture/restore ----
@@ -181,21 +201,20 @@ static void CaptureProjectiles(GameSnapshot* snapshot) {
 bool ResolveFighterPointers(uint64_t outAddrs[MAX_FIGHTERS]) {
     memset(outAddrs, 0, MAX_FIGHTERS * sizeof(uint64_t));
 
-    uint64_t sChar = 0;
-    if (!ReadStaticPointer(ADDR_sCharacter, &sChar)) return false;
-
-    uint64_t tableBase = sChar + FIGHTER_TABLE_OFFSET;
+    // Fighter pointers live in the "mystery table" (gSound region),
+    // NOT in sCharacter. The research DLL discovered this empirically.
+    uint64_t mysteryTable = 0;
+    if (!ReadStaticPointer(ADDR_gSound, &mysteryTable)) return false;
 
     for (int i = 0; i < MAX_FIGHTERS; i++) {
-        uint64_t entryAddr = tableBase + i * FIGHTER_TABLE_STRIDE;
-        uint64_t fighterPtr = 0;
-        if (SafeReadPtr(entryAddr, &fighterPtr) && fighterPtr != 0 &&
-            IsReadable(fighterPtr, FIGHTER_SNAPSHOT_SIZE)) {
-            outAddrs[i] = fighterPtr;
-        }
+        SafeReadPtr(mysteryTable + FIGHTER_TABLE_OFFSET + (FIGHTER_TABLE_STRIDE * i), &outAddrs[i]);
     }
 
-    return true;
+    // At least one fighter must be valid
+    int validCount = 0;
+    for (int i = 0; i < MAX_FIGHTERS; i++)
+        if (outAddrs[i] != 0) validCount++;
+    return validCount > 0;
 }
 
 bool CaptureSnapshot(GameSnapshot* snapshot) {

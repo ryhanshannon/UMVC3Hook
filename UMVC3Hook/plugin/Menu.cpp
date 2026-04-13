@@ -132,16 +132,29 @@ void UMVC3Menu::UpdateControls()
 	// Process save/load requests outside of ImGui draw
 	if (m_saveRequested) {
 		m_saveRequested = false;
-		uint64_t start = umvc3::QueryPerformanceMicros();
-		if (umvc3::CaptureSnapshot(&m_rollbackSnapshot)) {
-			m_lastSaveMicros = umvc3::QueryPerformanceMicros() - start;
-			m_lastChecksum = umvc3::ChecksumSnapshot(m_rollbackSnapshot);
-			sprintf_s(m_rollbackStatus, "Saved at frame %llu (%zu bytes, %llu us)",
-				(unsigned long long)umvc3::GetFrameBoundaryCount(),
-				m_rollbackSnapshot.totalBytes,
-				(unsigned long long)m_lastSaveMicros);
+
+		// Pre-check: can we even resolve fighters?
+		uint64_t testAddrs[umvc3::MAX_FIGHTERS] = {};
+		bool fightersOk = umvc3::ResolveFighterPointers(testAddrs);
+		int validCount = 0;
+		for (int i = 0; i < umvc3::MAX_FIGHTERS; i++)
+			if (testAddrs[i] != 0) validCount++;
+
+		if (!fightersOk) {
+			sprintf_s(m_rollbackStatus, "Save FAILED: cannot resolve fighters (found %d/6). Are you in a match?", validCount);
 		} else {
-			sprintf_s(m_rollbackStatus, "Save FAILED");
+			uint64_t start = umvc3::QueryPerformanceMicros();
+			if (umvc3::CaptureSnapshot(&m_rollbackSnapshot)) {
+				m_lastSaveMicros = umvc3::QueryPerformanceMicros() - start;
+				m_lastChecksum = umvc3::ChecksumSnapshot(m_rollbackSnapshot);
+				sprintf_s(m_rollbackStatus, "Saved at frame %llu (%zu bytes, %llu us, %d fighters)",
+					(unsigned long long)umvc3::GetFrameBoundaryCount(),
+					m_rollbackSnapshot.totalBytes,
+					(unsigned long long)m_lastSaveMicros,
+					validCount);
+			} else {
+				sprintf_s(m_rollbackStatus, "Save FAILED: CaptureSnapshot returned false (fighters=%d)", validCount);
+			}
 		}
 	}
 
