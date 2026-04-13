@@ -129,49 +129,59 @@ void UMVC3Menu::UpdateControls()
 	if (GetAsyncKeyState(VK_F9) & 1)
 		m_loadRequested = true;
 
-	// Process save/load requests outside of ImGui draw
+	// Process save/load via frame-boundary-safe command queue.
+	// This ensures save/load happens on the game's main thread between frames,
+	// not racing with the simulation from this plugin thread.
 	if (m_saveRequested) {
 		m_saveRequested = false;
-
-		// Pre-check: can we even resolve fighters?
-		uint64_t testAddrs[umvc3::MAX_FIGHTERS] = {};
-		bool fightersOk = umvc3::ResolveFighterPointers(testAddrs);
-		int validCount = 0;
-		for (int i = 0; i < umvc3::MAX_FIGHTERS; i++)
-			if (testAddrs[i] != 0) validCount++;
-
-		if (!fightersOk) {
-			sprintf_s(m_rollbackStatus, "Save FAILED: cannot resolve fighters (found %d/6). Are you in a match?", validCount);
-		} else {
-			uint64_t start = umvc3::QueryPerformanceMicros();
-			if (umvc3::CaptureSnapshot(&m_rollbackSnapshot)) {
-				m_lastSaveMicros = umvc3::QueryPerformanceMicros() - start;
-				m_lastChecksum = umvc3::ChecksumSnapshot(m_rollbackSnapshot);
-				sprintf_s(m_rollbackStatus, "Saved at frame %llu (%zu bytes, %llu us, %d fighters)",
-					(unsigned long long)umvc3::GetFrameBoundaryCount(),
-					m_rollbackSnapshot.totalBytes,
-					(unsigned long long)m_lastSaveMicros,
-					validCount);
-			} else {
-				sprintf_s(m_rollbackStatus, "Save FAILED: CaptureSnapshot returned false (fighters=%d)", validCount);
-			}
+		umvc3::FrameCommandResult result = umvc3::RequestSave();
+		switch (result) {
+		case umvc3::FrameCommandResult::Success: {
+			const auto& snap = umvc3::GetLastSnapshot();
+			m_lastSaveMicros = snap.captureMicros;
+			m_lastChecksum = umvc3::ChecksumSnapshot(snap);
+			int fighters = 0;
+			for (int i = 0; i < umvc3::MAX_FIGHTERS; i++)
+				if (snap.fighterAddrs[i] != 0) fighters++;
+			sprintf_s(m_rollbackStatus, "Saved at frame %llu (%zu bytes, %llu us, %d fighters)",
+				(unsigned long long)umvc3::GetFrameBoundaryCount(),
+				snap.totalBytes, (unsigned long long)m_lastSaveMicros, fighters);
+			break;
+		}
+		case umvc3::FrameCommandResult::Failed:
+			sprintf_s(m_rollbackStatus, "Save FAILED (CaptureSnapshot returned false)");
+			break;
+		case umvc3::FrameCommandResult::Timeout:
+			sprintf_s(m_rollbackStatus, "Save TIMEOUT (game may be paused or hook not firing)");
+			break;
+		case umvc3::FrameCommandResult::NotInstalled:
+			sprintf_s(m_rollbackStatus, "Save FAILED: frame boundary hook not installed");
+			break;
 		}
 	}
 
 	if (m_loadRequested) {
 		m_loadRequested = false;
-		if (m_rollbackSnapshot.valid) {
-			uint64_t start = umvc3::QueryPerformanceMicros();
-			if (umvc3::LoadSnapshot(m_rollbackSnapshot)) {
-				m_lastLoadMicros = umvc3::QueryPerformanceMicros() - start;
-				sprintf_s(m_rollbackStatus, "Loaded at frame %llu (%llu us)",
-					(unsigned long long)umvc3::GetFrameBoundaryCount(),
-					(unsigned long long)m_lastLoadMicros);
-			} else {
-				sprintf_s(m_rollbackStatus, "Load FAILED");
-			}
-		} else {
+		const auto& snap = umvc3::GetLastSnapshot();
+		if (!snap.valid) {
 			sprintf_s(m_rollbackStatus, "No snapshot to load");
+		} else {
+			umvc3::FrameCommandResult result = umvc3::RequestLoad();
+			switch (result) {
+			case umvc3::FrameCommandResult::Success:
+				sprintf_s(m_rollbackStatus, "Loaded at frame %llu",
+					(unsigned long long)umvc3::GetFrameBoundaryCount());
+				break;
+			case umvc3::FrameCommandResult::Failed:
+				sprintf_s(m_rollbackStatus, "Load FAILED");
+				break;
+			case umvc3::FrameCommandResult::Timeout:
+				sprintf_s(m_rollbackStatus, "Load TIMEOUT");
+				break;
+			case umvc3::FrameCommandResult::NotInstalled:
+				sprintf_s(m_rollbackStatus, "Load FAILED: hook not installed");
+				break;
+			}
 		}
 	}
 }
@@ -363,21 +373,23 @@ void UMVC3Menu::DrawRollbackTab()
 	if (ImGui::Button("Load State (F9)"))
 		m_loadRequested = true;
 
-	if (m_rollbackSnapshot.valid) {
-		ImGui::Text("Snapshot: VALID (%zu bytes)", m_rollbackSnapshot.totalBytes);
-		ImGui::Text("Capture: %llu us", (unsigned long long)m_lastSaveMicros);
-		if (m_lastLoadMicros > 0)
-			ImGui::Text("Last Load: %llu us", (unsigned long long)m_lastLoadMicros);
-		ImGui::Text("Checksum: 0x%016llX", (unsigned long long)m_lastChecksum);
+	{
+		const auto& snap = umvc3::GetLastSnapshot();
+		if (snap.valid) {
+			ImGui::Text("Snapshot: VALID (%zu bytes)", snap.totalBytes);
+			ImGui::Text("Capture: %llu us", (unsigned long long)snap.captureMicros);
+			if (m_lastLoadMicros > 0)
+				ImGui::Text("Last Load: %llu us", (unsigned long long)m_lastLoadMicros);
+			ImGui::Text("Checksum: 0x%016llX", (unsigned long long)m_lastChecksum);
 
-		// Fighter breakdown
-		int validFighters = 0;
-		for (int i = 0; i < umvc3::MAX_FIGHTERS; i++)
-			if (m_rollbackSnapshot.fighterAddrs[i] != 0) validFighters++;
-		ImGui::Text("Fighters: %d/6", validFighters);
-		ImGui::Text("Projectiles: %zu", m_rollbackSnapshot.projectiles.size());
-	} else {
-		ImGui::TextDisabled("No snapshot saved");
+			int validFighters = 0;
+			for (int i = 0; i < umvc3::MAX_FIGHTERS; i++)
+				if (snap.fighterAddrs[i] != 0) validFighters++;
+			ImGui::Text("Fighters: %d/6", validFighters);
+			ImGui::Text("Projectiles: %zu", snap.projectiles.size());
+		} else {
+			ImGui::TextDisabled("No snapshot saved");
+		}
 	}
 
 	ImGui::Separator();

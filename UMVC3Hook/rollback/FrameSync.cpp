@@ -14,15 +14,50 @@ static std::atomic<bool>     g_hookInstalled{false};
 static void*                 g_hookStub = nullptr;
 
 // The original function that the CALL at ADDR_InputHook targets.
-// We call through to it after our hook logic.
 using InputFuncPtr = void(__fastcall*)(long long*);
 static InputFuncPtr g_originalInputFunc = nullptr;
+
+// ---- Frame-boundary command queue ----
+// Save/load MUST execute on the game's main thread at the frame boundary.
+// Other threads post commands here; the hook processes them synchronously.
+
+enum class PendingCommand : LONG {
+    None = 0,
+    Save = 1,
+    Load = 2,
+};
+
+static volatile LONG g_pendingCommand = 0;     // Written by requester, read by hook
+static volatile LONG g_commandResult = 0;      // 1=success, -1=fail, written by hook
+static HANDLE        g_commandDoneEvent = nullptr;
+
+// The single shared snapshot — owned by the frame boundary thread.
+static GameSnapshot  g_snapshot;
+
+static void ProcessPendingCommand() {
+    LONG cmd = InterlockedExchange(&g_pendingCommand, static_cast<LONG>(PendingCommand::None));
+    if (cmd == static_cast<LONG>(PendingCommand::None)) return;
+
+    if (cmd == static_cast<LONG>(PendingCommand::Save)) {
+        bool ok = CaptureSnapshot(&g_snapshot);
+        InterlockedExchange(&g_commandResult, ok ? 1 : -1);
+        if (g_commandDoneEvent) SetEvent(g_commandDoneEvent);
+    }
+    else if (cmd == static_cast<LONG>(PendingCommand::Load)) {
+        bool ok = LoadSnapshot(g_snapshot);
+        InterlockedExchange(&g_commandResult, ok ? 1 : -1);
+        if (g_commandDoneEvent) SetEvent(g_commandDoneEvent);
+    }
+}
 
 static void __fastcall FrameBoundaryHookFn(long long* param_1) {
     // param_1 IS the input buffer base pointer — cache it for snapshot use
     SetInputBufferBase(reinterpret_cast<uint64_t>(param_1));
 
     g_frameBoundaryCount.fetch_add(1, std::memory_order_release);
+
+    // Process any pending save/load command AT the frame boundary
+    ProcessPendingCommand();
 
     // Call the original input function
     if (g_originalInputFunc) {
@@ -127,6 +162,43 @@ bool IsFrameBoundaryHookInstalled() {
 
 uint64_t GetFrameBoundaryCount() {
     return g_frameBoundaryCount.load(std::memory_order_acquire);
+}
+
+// ---- Frame-boundary-safe request API ----
+
+static FrameCommandResult IssueCommand(PendingCommand cmd) {
+    if (!g_hookInstalled.load(std::memory_order_acquire))
+        return FrameCommandResult::NotInstalled;
+
+    // Lazy-init the event
+    if (!g_commandDoneEvent) {
+        g_commandDoneEvent = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+        if (!g_commandDoneEvent) return FrameCommandResult::Failed;
+    }
+
+    // Post the command
+    InterlockedExchange(&g_commandResult, 0);
+    InterlockedExchange(&g_pendingCommand, static_cast<LONG>(cmd));
+
+    // Wait for the hook to process it (timeout = 500ms = ~30 frames)
+    DWORD wait = WaitForSingleObject(g_commandDoneEvent, 500);
+    if (wait == WAIT_TIMEOUT)
+        return FrameCommandResult::Timeout;
+
+    LONG result = InterlockedCompareExchange(&g_commandResult, 0, 0);
+    return (result == 1) ? FrameCommandResult::Success : FrameCommandResult::Failed;
+}
+
+FrameCommandResult RequestSave() {
+    return IssueCommand(PendingCommand::Save);
+}
+
+FrameCommandResult RequestLoad() {
+    return IssueCommand(PendingCommand::Load);
+}
+
+const GameSnapshot& GetLastSnapshot() {
+    return g_snapshot;
 }
 
 // ---- Renderless frame advance ----

@@ -64,7 +64,6 @@ public:
 	void	 KeyBind(int* var, const char* bindName, const char* name);
 
 	// Rollback test state
-	umvc3::GameSnapshot m_rollbackSnapshot;
 	uint64_t m_lastSaveMicros = 0;
 	uint64_t m_lastLoadMicros = 0;
 	uint64_t m_lastChecksum = 0;

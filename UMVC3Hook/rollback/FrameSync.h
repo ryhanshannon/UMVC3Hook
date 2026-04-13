@@ -9,6 +9,14 @@ namespace umvc3 {
 // The game calls an input-reading function at 0x140289C5A once per frame.
 // We hook this call site to get a reliable frame boundary signal, which
 // serves as the synchronization point for rollback operations.
+//
+// CRITICAL: Save/load MUST happen at the frame boundary, not from arbitrary
+// threads. The game's simulation thread is between frames only at this hook
+// point. Calling CaptureSnapshot/LoadSnapshot from another thread races with
+// the simulation and WILL eventually crash.
+//
+// Use RequestSave/RequestLoad to queue operations that execute safely at
+// the next frame boundary.
 
 // Install the input boundary hook. Must be called after the game is loaded.
 // Returns false if the hook could not be installed.
@@ -20,20 +28,30 @@ bool IsFrameBoundaryHookInstalled();
 // Current frame boundary count (incremented each game frame).
 uint64_t GetFrameBoundaryCount();
 
+// ---- Frame-boundary-safe save/load ----
+// These queue a command that executes at the next frame boundary.
+// They block the calling thread until completion (up to ~500ms timeout).
+// Returns true if the operation succeeded.
+
+enum class FrameCommandResult {
+    Success,
+    Failed,
+    Timeout,
+    NotInstalled,
+};
+
+FrameCommandResult RequestSave();
+FrameCommandResult RequestLoad();
+
+// Access the last snapshot (owned by the frame boundary thread).
+// Only valid after a successful RequestSave().
+struct GameSnapshot; // forward decl
+const GameSnapshot& GetLastSnapshot();
+
 // ---- Renderless frame advance ----
-// Patches render/VFX functions with RET (0xC3) to skip GPU work,
-// then lets the game advance one simulation frame.
 
-// Disable all render functions (patch with RET).
-// Stores original bytes for later restoration.
-// Returns false if any patch fails.
 bool DisableRendering();
-
-// Restore all render functions to their original bytes.
-// Returns false if any restoration fails.
 bool EnableRendering();
-
-// Returns true if rendering is currently disabled.
 bool IsRenderingDisabled();
 
 } // namespace umvc3
