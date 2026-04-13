@@ -88,6 +88,11 @@ void UMVC3Menu::Draw()
 			DrawMiscTab();
 			ImGui::EndTabItem();
 		}
+		if (ImGui::BeginTabItem("Rollback"))
+		{
+			DrawRollbackTab();
+			ImGui::EndTabItem();
+		}
 		ImGui::EndTabBar();
 	}
 	ImGui::End();
@@ -116,7 +121,46 @@ void UMVC3Menu::Process()
 
 void UMVC3Menu::UpdateControls()
 {
+	// F8: Save snapshot
+	if (GetAsyncKeyState(VK_F8) & 1)
+		m_saveRequested = true;
 
+	// F9: Load snapshot
+	if (GetAsyncKeyState(VK_F9) & 1)
+		m_loadRequested = true;
+
+	// Process save/load requests outside of ImGui draw
+	if (m_saveRequested) {
+		m_saveRequested = false;
+		uint64_t start = umvc3::QueryPerformanceMicros();
+		if (umvc3::CaptureSnapshot(&m_rollbackSnapshot)) {
+			m_lastSaveMicros = umvc3::QueryPerformanceMicros() - start;
+			m_lastChecksum = umvc3::ChecksumSnapshot(m_rollbackSnapshot);
+			sprintf_s(m_rollbackStatus, "Saved at frame %llu (%zu bytes, %llu us)",
+				(unsigned long long)umvc3::GetFrameBoundaryCount(),
+				m_rollbackSnapshot.totalBytes,
+				(unsigned long long)m_lastSaveMicros);
+		} else {
+			sprintf_s(m_rollbackStatus, "Save FAILED");
+		}
+	}
+
+	if (m_loadRequested) {
+		m_loadRequested = false;
+		if (m_rollbackSnapshot.valid) {
+			uint64_t start = umvc3::QueryPerformanceMicros();
+			if (umvc3::LoadSnapshot(m_rollbackSnapshot)) {
+				m_lastLoadMicros = umvc3::QueryPerformanceMicros() - start;
+				sprintf_s(m_rollbackStatus, "Loaded at frame %llu (%llu us)",
+					(unsigned long long)umvc3::GetFrameBoundaryCount(),
+					(unsigned long long)m_lastLoadMicros);
+			} else {
+				sprintf_s(m_rollbackStatus, "Load FAILED");
+			}
+		} else {
+			sprintf_s(m_rollbackStatus, "No snapshot to load");
+		}
+	}
 }
 
 void UMVC3Menu::UpdateFreecam()
@@ -285,6 +329,58 @@ void UMVC3Menu::DrawMiscTab()
 	ShowHelpMarker(eKeyboardMan::KeyToString(SettingsMgr->iToggleHUDKey));
 	ImGui::Checkbox("Disable All HUD", &m_bDisableHUDTotal);
 	ImGui::Checkbox("Disable Effects", &m_bDisableEffects);
+}
+
+void UMVC3Menu::DrawRollbackTab()
+{
+	ImGui::Text("Frame Boundary Hook: %s",
+		umvc3::IsFrameBoundaryHookInstalled() ? "ACTIVE" : "NOT INSTALLED");
+	ImGui::Text("Frame Count: %llu",
+		(unsigned long long)umvc3::GetFrameBoundaryCount());
+	ImGui::Text("Rendering: %s",
+		umvc3::IsRenderingDisabled() ? "DISABLED" : "Normal");
+
+	ImGui::Separator();
+	ImGui::Text("Snapshot");
+
+	if (ImGui::Button("Save State (F8)"))
+		m_saveRequested = true;
+
+	ImGui::SameLine();
+	if (ImGui::Button("Load State (F9)"))
+		m_loadRequested = true;
+
+	if (m_rollbackSnapshot.valid) {
+		ImGui::Text("Snapshot: VALID (%zu bytes)", m_rollbackSnapshot.totalBytes);
+		ImGui::Text("Capture: %llu us", (unsigned long long)m_lastSaveMicros);
+		if (m_lastLoadMicros > 0)
+			ImGui::Text("Last Load: %llu us", (unsigned long long)m_lastLoadMicros);
+		ImGui::Text("Checksum: 0x%016llX", (unsigned long long)m_lastChecksum);
+
+		// Fighter breakdown
+		int validFighters = 0;
+		for (int i = 0; i < umvc3::MAX_FIGHTERS; i++)
+			if (m_rollbackSnapshot.fighterAddrs[i] != 0) validFighters++;
+		ImGui::Text("Fighters: %d/6", validFighters);
+		ImGui::Text("Projectiles: %zu", m_rollbackSnapshot.projectiles.size());
+	} else {
+		ImGui::TextDisabled("No snapshot saved");
+	}
+
+	ImGui::Separator();
+	ImGui::Text("Renderless Sim");
+
+	if (!umvc3::IsRenderingDisabled()) {
+		if (ImGui::Button("Disable Rendering"))
+			umvc3::DisableRendering();
+	} else {
+		if (ImGui::Button("Enable Rendering"))
+			umvc3::EnableRendering();
+	}
+
+	ImGui::Separator();
+	if (m_rollbackStatus[0] != '\0')
+		ImGui::TextWrapped("Status: %s", m_rollbackStatus);
 }
 
 void UMVC3Menu::DrawSettings()

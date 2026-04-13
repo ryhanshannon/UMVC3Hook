@@ -10,6 +10,7 @@
 #include "plugin/Settings.h"
 #include "plugin/Hooks.h"
 
+#include "rollback/FrameSync.h"
 
 #include "utils/MemoryMgr.h"
 #include "utils/Trampoline.h"
@@ -37,6 +38,11 @@ void OnInitializeHook()
 
 	// change dinput coop level
 	Patch<char>(_addr(0x1406A9864) + 2, 0x14);
+
+	if (umvc3::InstallFrameBoundaryHook())
+		eLog::Message(__FUNCTION__, "INFO: Frame boundary hook installed");
+	else
+		eLog::Message(__FUNCTION__, "WARN: Frame boundary hook failed to install");
 
 	CreateThread(NULL, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(PluginProcess), 0, NULL, 0);
 	HANDLE h = 0;

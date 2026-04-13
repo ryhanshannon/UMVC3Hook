@@ -4,6 +4,8 @@
 #include "../helper/eKeyboardMan.h"
 #include "../utils.h"
 #include "../gui/gui_impl_dx9.h"
+#include "../rollback/StateSnapshot.h"
+#include "../rollback/FrameSync.h"
 
 #include <DirectXMath.h>
 using namespace DirectX;
@@ -54,14 +56,21 @@ public:
 
 	void	 DrawCameraTab();
 	void	 DrawMiscTab();
-
-
+	void	 DrawRollbackTab();
 
 	void	 DrawSettings();
 
-
 	void	 DrawKeyBind(const char* name, int* var);
 	void	 KeyBind(int* var, const char* bindName, const char* name);
+
+	// Rollback test state
+	umvc3::GameSnapshot m_rollbackSnapshot;
+	uint64_t m_lastSaveMicros = 0;
+	uint64_t m_lastLoadMicros = 0;
+	uint64_t m_lastChecksum = 0;
+	bool     m_saveRequested = false;
+	bool     m_loadRequested = false;
+	char     m_rollbackStatus[256] = {};
 };
 
 
