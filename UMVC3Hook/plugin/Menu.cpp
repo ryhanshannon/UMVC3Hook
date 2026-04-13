@@ -408,7 +408,7 @@ void UMVC3Menu::DrawSettings()
 	ImGui::End();
 }
 
-void UMVC3Menu::DrawKeyBind(char* name, int* var)
+void UMVC3Menu::DrawKeyBind(const char* name, int* var)
 {
 	ImGui::SameLine();
 
@@ -421,7 +421,7 @@ void UMVC3Menu::DrawKeyBind(char* name, int* var)
 	}
 }
 
-void UMVC3Menu::KeyBind(int* var, char* bindName, char* name)
+void UMVC3Menu::KeyBind(int* var, const char* bindName, const char* name)
 {
 	ImGui::LabelText("##", bindName);
 	DrawKeyBind(name, var);

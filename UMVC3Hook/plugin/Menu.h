@@ -60,8 +60,8 @@ public:
 	void	 DrawSettings();
 
 
-	void	 DrawKeyBind(char* name, int* var);
-	void	 KeyBind(int* var, char* bindName, char* name);
+	void	 DrawKeyBind(const char* name, int* var);
+	void	 KeyBind(int* var, const char* bindName, const char* name);
 };
 
 
