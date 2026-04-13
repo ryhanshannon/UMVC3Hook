@@ -200,6 +200,10 @@
     <ClInclude Include="utils\MemoryMgr.h" />
     <ClInclude Include="utils\Patterns.h" />
     <ClInclude Include="utils\Trampoline.h" />
+    <ClInclude Include="rollback\Addresses.h" />
+    <ClInclude Include="rollback\Memory.h" />
+    <ClInclude Include="rollback\StateSnapshot.h" />
+    <ClInclude Include="rollback\FrameSync.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
@@ -235,6 +239,9 @@
     <ClCompile Include="utils\addr.cpp" />
     <ClCompile Include="utils\IniReader.cpp" />
     <ClCompile Include="utils\Patterns.cpp" />
+    <ClCompile Include="rollback\Memory.cpp" />
+    <ClCompile Include="rollback\StateSnapshot.cpp" />
+    <ClCompile Include="rollback\FrameSync.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="UMVC3Hook.rc" />
