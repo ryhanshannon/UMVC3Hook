@@ -39,10 +39,9 @@ void OnInitializeHook()
 	// change dinput coop level
 	Patch<char>(_addr(0x1406A9864) + 2, 0x14);
 
-	if (umvc3::InstallFrameBoundaryHook())
-		eLog::Message(__FUNCTION__, "INFO: Frame boundary hook installed");
-	else
-		eLog::Message(__FUNCTION__, "WARN: Frame boundary hook failed to install");
+	// NOTE: Frame boundary hook is installed lazily from PluginProcess
+	// after the game has fully initialized. Installing it here is too
+	// early — the code at 0x140289C5A may not be decrypted yet.
 
 	CreateThread(NULL, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(PluginProcess), 0, NULL, 0);
 	HANDLE h = 0;
