@@ -29,6 +29,7 @@ enum class PendingCommand : LONG {
 
 static volatile LONG g_pendingCommand = 0;     // Written by requester, read by hook
 static volatile LONG g_commandResult = 0;      // 1=success, -1=fail, written by hook
+static volatile LONG g_commandBusy = 0;        // Reentrancy guard
 static HANDLE        g_commandDoneEvent = nullptr;
 
 // The single shared snapshot — owned by the frame boundary thread.
@@ -51,17 +52,30 @@ static void ProcessPendingCommand() {
 }
 
 static void __fastcall FrameBoundaryHookFn(long long* param_1) {
-    // param_1 IS the input buffer base pointer — cache it for snapshot use
+    // Cache param_1 — it IS the input buffer base pointer
     SetInputBufferBase(reinterpret_cast<uint64_t>(param_1));
 
-    g_frameBoundaryCount.fetch_add(1, std::memory_order_release);
-
-    // Process any pending save/load command AT the frame boundary
-    ProcessPendingCommand();
-
-    // Call the original input function
+    // CRITICAL: Call the original input function FIRST.
+    // The game must process this frame's input before we save/load state.
+    // The research DLL does the same (line 3440: original(param_1) before
+    // any command processing).
     if (g_originalInputFunc) {
         g_originalInputFunc(param_1);
+    }
+
+    // Increment AFTER original runs (matches research DLL line 3442)
+    g_frameBoundaryCount.fetch_add(1, std::memory_order_release);
+
+    // Reentrancy guard — if we're already processing, skip
+    if (InterlockedCompareExchange(&g_commandBusy, 1, 0) != 0)
+        return;
+
+    // Process pending save/load command with SEH protection
+    __try {
+        ProcessPendingCommand();
+    }
+    __finally {
+        InterlockedExchange(&g_commandBusy, 0);
     }
 }
 
