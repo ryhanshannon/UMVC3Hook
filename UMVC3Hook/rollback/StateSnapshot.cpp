@@ -79,6 +79,11 @@ static bool IsAddressWithinRange(uint64_t addr, uint64_t base, size_t size) {
     return addr >= base && addr < (base + size);
 }
 
+static bool IsInMainModule(uint64_t addr) {
+    const uint64_t base = _addr(IMAGE_BASE);
+    return addr >= base && addr < (base + 0x02000000);
+}
+
 static size_t CountPointerArrayEntries(uint64_t arrayAddr,
                                        size_t hardCap,
                                        std::vector<uint64_t>* outPtrs) {
@@ -302,6 +307,7 @@ static bool CaptureCollisionTable(uint64_t fighterAddr, size_t tableOffset,
         uint64_t secondaryPtr = 0;
         if (SafeRead<uint64_t>(entryPtrs[i] + COLLISION_WRAPPER_SECONDARY_PTR_OFFSET, &secondaryPtr) &&
             secondaryPtr != 0 &&
+            !IsInMainModule(secondaryPtr) &&
             !IsAddressWithinRange(secondaryPtr, fighterAddr, FIGHTER_SNAPSHOT_SIZE) &&
             IsReadable(secondaryPtr, COLLISION_SECONDARY_SIZE)) {
             if (!CaptureRegion(secondaryPtr, COLLISION_SECONDARY_SIZE, &entry.secondaryRegion)) {
@@ -605,7 +611,7 @@ static bool RestoreCollisionTable(const CollisionTableSnapshot& table) {
     ok &= RestoreRegion(table.pointerArrayRegion, true);
 
     for (size_t i = 0; i < table.entries.size(); i++) {
-        ok &= RestoreRegion(table.entries[i].secondaryRegion, true);
+        ok &= RestoreRegion(table.entries[i].secondaryRegion, false);
         ok &= RestoreRegion(table.entries[i].wrapperRegion, true);
     }
 
