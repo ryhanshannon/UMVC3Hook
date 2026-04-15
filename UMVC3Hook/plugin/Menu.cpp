@@ -8,6 +8,22 @@
 
 UMVC3Menu* TheMenu = new UMVC3Menu();
 
+namespace {
+
+uint32_t ClampManualLoadFramesAgo(int framesAgo)
+{
+	if (framesAgo < 1)
+		return 1;
+
+	const int maxFramesAgo = static_cast<int>(umvc3::SNAPSHOT_RING_SIZE - 1);
+	if (framesAgo > maxFramesAgo)
+		return static_cast<uint32_t>(maxFramesAgo);
+
+	return static_cast<uint32_t>(framesAgo);
+}
+
+}
+
 static void ShowHelpMarker(const char* desc)
 {
 	ImGui::TextDisabled("(?)");
@@ -126,8 +142,16 @@ void UMVC3Menu::UpdateControls()
 		m_saveRequested = true;
 
 	// F9: Load snapshot
-	if (GetAsyncKeyState(VK_F9) & 1)
+	if (GetAsyncKeyState(VK_F9) & 1) {
+		m_requestedLoadFramesAgo = 0;
 		m_loadRequested = true;
+	}
+
+	// F10: Load the previous saved snapshot (1 save ago).
+	if (GetAsyncKeyState(VK_F10) & 1) {
+		m_requestedLoadFramesAgo = 1;
+		m_loadRequested = true;
+	}
 
 	// Process save/load via frame-boundary-safe command queue.
 	// This ensures save/load happens on the game's main thread between frames,
@@ -164,24 +188,32 @@ void UMVC3Menu::UpdateControls()
 
 	if (m_loadRequested) {
 		m_loadRequested = false;
-		const auto& snap = umvc3::GetLastSnapshot();
-		if (!snap.valid) {
-			sprintf_s(m_rollbackStatus, "No snapshot to load");
+		const uint32_t framesAgo = m_requestedLoadFramesAgo;
+		m_requestedLoadFramesAgo = 0;
+		const uint32_t storedCount = umvc3::GetStoredSnapshotCount();
+		if (storedCount == 0 || framesAgo >= storedCount) {
+			sprintf_s(m_rollbackStatus,
+				"No snapshot to load (framesAgo=%u, ring %u/%u)",
+				framesAgo,
+				storedCount,
+				umvc3::GetSnapshotRingCapacity());
 		} else {
-			umvc3::FrameCommandResult result = umvc3::RequestLoad();
+			umvc3::FrameCommandResult result = umvc3::RequestLoadFramesAgo(framesAgo);
 			switch (result) {
 			case umvc3::FrameCommandResult::Success:
 				m_lastLoadMicros = umvc3::GetLastLoadMicros();
-				sprintf_s(m_rollbackStatus, "Loaded slot %d at frame %llu (%llu us)",
-					umvc3::GetLastSnapshotSlotIndex(),
+				sprintf_s(m_rollbackStatus, "Loaded snapshot %u save(s) ago at frame %llu (%llu us, ring %u/%u)",
+					framesAgo,
 					(unsigned long long)umvc3::GetFrameBoundaryCount(),
-					(unsigned long long)m_lastLoadMicros);
+					(unsigned long long)m_lastLoadMicros,
+					storedCount,
+					umvc3::GetSnapshotRingCapacity());
 				break;
 			case umvc3::FrameCommandResult::Failed:
-				sprintf_s(m_rollbackStatus, "Load FAILED");
+				sprintf_s(m_rollbackStatus, "Load FAILED (framesAgo=%u)", framesAgo);
 				break;
 			case umvc3::FrameCommandResult::Timeout:
-				sprintf_s(m_rollbackStatus, "Load TIMEOUT");
+				sprintf_s(m_rollbackStatus, "Load TIMEOUT (framesAgo=%u)", framesAgo);
 				break;
 			case umvc3::FrameCommandResult::NotInstalled:
 				sprintf_s(m_rollbackStatus, "Load FAILED: hook not installed");
@@ -375,8 +407,32 @@ void UMVC3Menu::DrawRollbackTab()
 		m_saveRequested = true;
 
 	ImGui::SameLine();
-	if (ImGui::Button("Load State (F9)"))
+	if (ImGui::Button("Load Latest (F9)")) {
+		m_requestedLoadFramesAgo = 0;
 		m_loadRequested = true;
+	}
+
+	ImGui::SameLine();
+	if (ImGui::Button("Load Previous (F10)")) {
+		m_requestedLoadFramesAgo = 1;
+		m_loadRequested = true;
+	}
+
+	const uint32_t manualFramesAgo = ClampManualLoadFramesAgo(m_manualLoadFramesAgo);
+	if (m_manualLoadFramesAgo != static_cast<int>(manualFramesAgo))
+		m_manualLoadFramesAgo = static_cast<int>(manualFramesAgo);
+
+	ImGui::SetNextItemWidth(160.0f);
+	ImGui::InputInt("Manual Load Offset", &m_manualLoadFramesAgo);
+	const uint32_t clampedManualFramesAgo = ClampManualLoadFramesAgo(m_manualLoadFramesAgo);
+	if (m_manualLoadFramesAgo != static_cast<int>(clampedManualFramesAgo))
+		m_manualLoadFramesAgo = static_cast<int>(clampedManualFramesAgo);
+	ImGui::SameLine();
+	if (ImGui::Button("Load Older Slot")) {
+		m_requestedLoadFramesAgo = clampedManualFramesAgo;
+		m_loadRequested = true;
+	}
+	ImGui::TextDisabled("Manual load offset counts save slots ago from the newest snapshot.");
 
 	{
 		const auto& snap = umvc3::GetLastSnapshot();

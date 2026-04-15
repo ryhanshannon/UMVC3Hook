@@ -69,6 +69,8 @@ public:
 	uint64_t m_lastChecksum = 0;
 	bool     m_saveRequested = false;
 	bool     m_loadRequested = false;
+	uint32_t m_requestedLoadFramesAgo = 0;
+	int      m_manualLoadFramesAgo = 1;
 	char     m_rollbackStatus[256] = {};
 };
 
