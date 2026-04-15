@@ -27,6 +27,7 @@ constexpr uint64_t ADDR_GameName       = 0x140B12D10;
 
 // ---- Function addresses ----
 constexpr uint64_t ADDR_GetMvc3Manager  = 0x140001AF0;
+constexpr uint64_t ADDR_CollisionTableGrow = 0x140011660;
 constexpr uint64_t ADDR_InputHook       = 0x140289C5A;  // CALL site, once per frame
 constexpr uint64_t ADDR_OrigInputFunc   = 0x1402B41B0;
 constexpr uint64_t ADDR_BaseFighterTick = 0x14004BD30;
@@ -62,6 +63,7 @@ constexpr int SHOT_NODE_SNAPSHOT_SIZE   = 0x40;
 constexpr int SHOT_OBJECT_SNAPSHOT_SIZE = 0x80;
 constexpr int RECORDING_DATA_SIZE       = 0x100;
 constexpr int MAX_PROJECTILE_NODES      = 64;
+constexpr int MAX_COLLISION_TABLE_ENTRIES = 64;
 
 // Fighter table (inside sCharacter) — offsets for pointer chain walk
 constexpr int FIGHTER_TABLE_OFFSET = 0xAA0;
@@ -70,13 +72,16 @@ constexpr int FIGHTER_TABLE_STRIDE = 0x438;
 // Collision table offsets (inside each fighter struct)
 constexpr size_t FIGHTER_HITBOX_TABLE_OFFSET  = 0x4200;
 constexpr size_t FIGHTER_HURTBOX_TABLE_OFFSET = 0x4E10;
+constexpr size_t COLLISION_TABLE_VECTOR_OFFSET        = 0x18;
 constexpr size_t COLLISION_TABLE_COUNT_OFFSET         = 0x20;
+constexpr size_t COLLISION_TABLE_CAPACITY_OFFSET      = 0x24;
 constexpr size_t COLLISION_TABLE_POINTER_ARRAY_OFFSET = 0x30;
 constexpr size_t COLLISION_TABLE_HEADER_SIZE          = 0x40;
 constexpr size_t COLLISION_WRAPPER_SECONDARY_PTR_OFFSET = 0x10;
 constexpr size_t COLLISION_WRAPPER_DEFAULT_SIZE = 0x120;
 constexpr size_t COLLISION_WRAPPER_MIN_SIZE     = 0x40;
 constexpr size_t COLLISION_SECONDARY_SIZE       = 0x70;
+constexpr uint32_t COLLISION_TABLE_GROW_STEP    = 0x20;
 
 // Team offsets relative to sAction base
 constexpr size_t TEAM_1_OFFSET = 0x350;
