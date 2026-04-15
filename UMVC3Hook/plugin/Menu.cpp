@@ -139,13 +139,15 @@ void UMVC3Menu::UpdateControls()
 		case umvc3::FrameCommandResult::Success: {
 			const auto& snap = umvc3::GetLastSnapshot();
 			m_lastSaveMicros = snap.captureMicros;
-			m_lastChecksum = umvc3::ChecksumSnapshot(snap);
+			m_lastChecksum = umvc3::GetLastSnapshotChecksum();
 			int fighters = 0;
 			for (int i = 0; i < umvc3::MAX_FIGHTERS; i++)
 				if (snap.fighterAddrs[i] != 0) fighters++;
-			sprintf_s(m_rollbackStatus, "Saved at frame %llu (%zu bytes, %llu us, %d fighters)",
+			sprintf_s(m_rollbackStatus, "Saved slot %d at frame %llu (%zu bytes, %llu us, %d fighters, ring %u/%u)",
+				umvc3::GetLastSnapshotSlotIndex(),
 				(unsigned long long)umvc3::GetFrameBoundaryCount(),
-				snap.totalBytes, (unsigned long long)m_lastSaveMicros, fighters);
+				snap.totalBytes, (unsigned long long)m_lastSaveMicros, fighters,
+				umvc3::GetStoredSnapshotCount(), umvc3::GetSnapshotRingCapacity());
 			break;
 		}
 		case umvc3::FrameCommandResult::Failed:
@@ -169,8 +171,11 @@ void UMVC3Menu::UpdateControls()
 			umvc3::FrameCommandResult result = umvc3::RequestLoad();
 			switch (result) {
 			case umvc3::FrameCommandResult::Success:
-				sprintf_s(m_rollbackStatus, "Loaded at frame %llu",
-					(unsigned long long)umvc3::GetFrameBoundaryCount());
+				m_lastLoadMicros = umvc3::GetLastLoadMicros();
+				sprintf_s(m_rollbackStatus, "Loaded slot %d at frame %llu (%llu us)",
+					umvc3::GetLastSnapshotSlotIndex(),
+					(unsigned long long)umvc3::GetFrameBoundaryCount(),
+					(unsigned long long)m_lastLoadMicros);
 				break;
 			case umvc3::FrameCommandResult::Failed:
 				sprintf_s(m_rollbackStatus, "Load FAILED");
@@ -364,7 +369,7 @@ void UMVC3Menu::DrawRollbackTab()
 		umvc3::IsRenderingDisabled() ? "DISABLED" : "Normal");
 
 	ImGui::Separator();
-	ImGui::Text("Snapshot");
+	ImGui::Text("Snapshot Ring");
 
 	if (ImGui::Button("Save State (F8)"))
 		m_saveRequested = true;
@@ -377,6 +382,11 @@ void UMVC3Menu::DrawRollbackTab()
 		const auto& snap = umvc3::GetLastSnapshot();
 		if (snap.valid) {
 			ImGui::Text("Snapshot: VALID (%zu bytes)", snap.totalBytes);
+			ImGui::Text("Ring: %u / %u slots",
+				umvc3::GetStoredSnapshotCount(),
+				umvc3::GetSnapshotRingCapacity());
+			ImGui::Text("Latest Slot: %d", umvc3::GetLastSnapshotSlotIndex());
+			ImGui::Text("Captured Frame: %llu", (unsigned long long)snap.frameCounter);
 			ImGui::Text("Capture: %llu us", (unsigned long long)snap.captureMicros);
 			if (m_lastLoadMicros > 0)
 				ImGui::Text("Last Load: %llu us", (unsigned long long)m_lastLoadMicros);

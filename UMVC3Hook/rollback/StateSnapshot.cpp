@@ -73,6 +73,105 @@ static bool ResolveInputBase(uint64_t* outBase) {
     return false;
 }
 
+static void ReserveRegionBytes(MemoryRegion* region, size_t size) {
+    if (!region) {
+        return;
+    }
+    if (region->bytes.capacity() < size) {
+        region->bytes.reserve(size);
+    }
+}
+
+static void ResetRegionForCapture(MemoryRegion* region) {
+    if (!region) {
+        return;
+    }
+    region->addr = 0;
+    region->bytes.clear();
+}
+
+static void ResetCollisionTableForCapture(CollisionTableSnapshot* table) {
+    if (!table) {
+        return;
+    }
+    table->fighterAddr = 0;
+    table->tableFieldAddr = 0;
+    table->isHurtbox = false;
+    table->countField = 0;
+    table->capturedCount = 0;
+    table->wrapperSize = 0;
+    ResetRegionForCapture(&table->tableHeaderRegion);
+    ResetRegionForCapture(&table->pointerArrayRegion);
+    table->entries.clear();
+}
+
+static void ResetSnapshotForCapture(GameSnapshot* snapshot) {
+    snapshot->valid = false;
+    snapshot->frameCounter = 0;
+    memset(snapshot->fighterAddrs, 0, sizeof(snapshot->fighterAddrs));
+    for (int i = 0; i < MAX_FIGHTERS; i++) {
+        ResetRegionForCapture(&snapshot->fighters[i]);
+        ResetCollisionTableForCapture(&snapshot->hitboxes[i]);
+        ResetCollisionTableForCapture(&snapshot->hurtboxes[i]);
+    }
+
+    ResetRegionForCapture(&snapshot->teams[0]);
+    ResetRegionForCapture(&snapshot->teams[1]);
+    ResetRegionForCapture(&snapshot->sActionCore);
+    ResetRegionForCapture(&snapshot->mysteryTableRegion);
+    ResetRegionForCapture(&snapshot->gameSpeedRegion);
+    snapshot->rngStateAddr = 0;
+    ResetRegionForCapture(&snapshot->rngSeedRegion);
+    snapshot->inputBase = 0;
+    ResetRegionForCapture(&snapshot->inputP1);
+    ResetRegionForCapture(&snapshot->inputP2);
+    ResetRegionForCapture(&snapshot->recordingDataState);
+    snapshot->projectiles.clear();
+    snapshot->totalBytes = 0;
+    snapshot->captureMicros = 0;
+}
+
+void PrepareSnapshotStorage(GameSnapshot* snapshot) {
+    if (!snapshot) {
+        return;
+    }
+
+    for (int i = 0; i < MAX_FIGHTERS; i++) {
+        ReserveRegionBytes(&snapshot->fighters[i], FIGHTER_SNAPSHOT_SIZE);
+
+        ReserveRegionBytes(&snapshot->hitboxes[i].tableHeaderRegion, COLLISION_TABLE_HEADER_SIZE);
+        ReserveRegionBytes(
+            &snapshot->hitboxes[i].pointerArrayRegion,
+            MAX_COLLISION_TABLE_ENTRIES * sizeof(uint64_t));
+        if (snapshot->hitboxes[i].entries.capacity() < MAX_COLLISION_TABLE_ENTRIES) {
+            snapshot->hitboxes[i].entries.reserve(MAX_COLLISION_TABLE_ENTRIES);
+        }
+
+        ReserveRegionBytes(&snapshot->hurtboxes[i].tableHeaderRegion, COLLISION_TABLE_HEADER_SIZE);
+        ReserveRegionBytes(
+            &snapshot->hurtboxes[i].pointerArrayRegion,
+            MAX_COLLISION_TABLE_ENTRIES * sizeof(uint64_t));
+        if (snapshot->hurtboxes[i].entries.capacity() < MAX_COLLISION_TABLE_ENTRIES) {
+            snapshot->hurtboxes[i].entries.reserve(MAX_COLLISION_TABLE_ENTRIES);
+        }
+    }
+
+    ReserveRegionBytes(&snapshot->teams[0], TEAM_SNAPSHOT_SIZE);
+    ReserveRegionBytes(&snapshot->teams[1], TEAM_SNAPSHOT_SIZE);
+    ReserveRegionBytes(&snapshot->sActionCore, MATCH_CORE_SNAPSHOT_SIZE);
+    ReserveRegionBytes(&snapshot->mysteryTableRegion, MYSTERY_TABLE_SIZE);
+    ReserveRegionBytes(&snapshot->gameSpeedRegion, GAME_SPEED_REGION_SIZE);
+    ReserveRegionBytes(&snapshot->rngSeedRegion, sizeof(uint32_t));
+    ReserveRegionBytes(&snapshot->inputP1, INPUT_BUFFER_SIZE);
+    ReserveRegionBytes(&snapshot->inputP2, INPUT_BUFFER_SIZE);
+    ReserveRegionBytes(&snapshot->recordingDataState, RECORDING_DATA_SIZE);
+
+    const size_t maxProjectileSlots = static_cast<size_t>(MAX_PROJECTILE_NODES) * 3;
+    if (snapshot->projectiles.capacity() < maxProjectileSlots) {
+        snapshot->projectiles.reserve(maxProjectileSlots);
+    }
+}
+
 // ---- Collision table capture/restore ----
 
 static bool IsAddressWithinRange(uint64_t addr, uint64_t base, size_t size) {
@@ -684,7 +783,11 @@ bool ResolveFighterPointers(uint64_t outAddrs[MAX_FIGHTERS]) {
 }
 
 bool CaptureSnapshot(GameSnapshot* snapshot) {
-    *snapshot = GameSnapshot{};
+    if (!snapshot) {
+        return false;
+    }
+    PrepareSnapshotStorage(snapshot);
+    ResetSnapshotForCapture(snapshot);
     const uint64_t startMicros = QueryPerformanceMicros();
 
     if (!ResolveFighterPointers(snapshot->fighterAddrs))
