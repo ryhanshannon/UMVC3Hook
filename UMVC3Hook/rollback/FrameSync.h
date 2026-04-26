@@ -40,13 +40,21 @@ enum class FrameCommandResult {
     NotInstalled,
 };
 
+constexpr uint32_t SNAPSHOT_RING_SIZE = 16;
+
 FrameCommandResult RequestSave();
 FrameCommandResult RequestLoad();
+FrameCommandResult RequestLoadFramesAgo(uint32_t framesAgo);
 
 // Access the last snapshot (owned by the frame boundary thread).
 // Only valid after a successful RequestSave().
 struct GameSnapshot; // forward decl
 const GameSnapshot& GetLastSnapshot();
+uint32_t GetStoredSnapshotCount();
+uint32_t GetSnapshotRingCapacity();
+int32_t GetLastSnapshotSlotIndex();
+uint64_t GetLastSnapshotChecksum();
+uint64_t GetLastLoadMicros();
 
 // ---- Renderless frame advance ----
 

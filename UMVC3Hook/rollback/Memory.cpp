@@ -49,7 +49,10 @@ bool SafeReadPtr(uint64_t addr, uint64_t* out) {
 
 bool CaptureRegion(uint64_t addr, size_t size, MemoryRegion* out) {
     out->addr = addr;
-    out->bytes.assign(size, 0);
+    if (out->bytes.capacity() < size) {
+        out->bytes.reserve(size);
+    }
+    out->bytes.resize(size);
     return SafeReadMem((const void*)addr, out->bytes.data(), size);
 }
 

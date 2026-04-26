@@ -28,24 +28,106 @@ enum class PendingCommand : LONG {
 };
 
 static volatile LONG g_pendingCommand = 0;     // Written by requester, read by hook
+static volatile LONG g_pendingLoadFramesAgo = 0;
 static volatile LONG g_commandResult = 0;      // 1=success, -1=fail, written by hook
 static volatile LONG g_commandBusy = 0;        // Reentrancy guard
 static HANDLE        g_commandDoneEvent = nullptr;
 
 // The single shared snapshot — owned by the frame boundary thread.
-static GameSnapshot  g_snapshot;
+struct SnapshotSlot {
+    GameSnapshot snapshot;
+    uint64_t     checksum = 0;
+    uint64_t     frameCounter = 0;
+    bool         valid = false;
+};
+
+static constexpr LONG INVALID_SNAPSHOT_SLOT = -1;
+
+static SnapshotSlot          g_snapshotRing[SNAPSHOT_RING_SIZE];
+static std::atomic<uint32_t> g_snapshotCount{0};
+static std::atomic<uint32_t> g_nextWriteSlot{0};
+static std::atomic<LONG>     g_latestSnapshotSlot{INVALID_SNAPSHOT_SLOT};
+static std::atomic<uint64_t> g_lastLoadMicros{0};
+static GameSnapshot          g_emptySnapshot;
+
+static void InitializeSnapshotRingStorage() {
+    for (uint32_t i = 0; i < SNAPSHOT_RING_SIZE; i++) {
+        PrepareSnapshotStorage(&g_snapshotRing[i].snapshot);
+        g_snapshotRing[i].checksum = 0;
+        g_snapshotRing[i].frameCounter = 0;
+        g_snapshotRing[i].valid = false;
+    }
+    g_snapshotCount.store(0, std::memory_order_release);
+    g_nextWriteSlot.store(0, std::memory_order_release);
+    g_latestSnapshotSlot.store(INVALID_SNAPSHOT_SLOT, std::memory_order_release);
+    g_lastLoadMicros.store(0, std::memory_order_release);
+}
+
+static bool ResolveSnapshotSlotForFramesAgo(uint32_t framesAgo,
+                                            SnapshotSlot** outSlot,
+                                            uint32_t* outSlotIndex) {
+    const uint32_t storedCount = g_snapshotCount.load(std::memory_order_acquire);
+    const LONG latestSlot = g_latestSnapshotSlot.load(std::memory_order_acquire);
+    if (storedCount == 0 || latestSlot == INVALID_SNAPSHOT_SLOT || framesAgo >= storedCount) {
+        return false;
+    }
+
+    const uint32_t slotIndex =
+        (static_cast<uint32_t>(latestSlot) + SNAPSHOT_RING_SIZE - (framesAgo % SNAPSHOT_RING_SIZE)) %
+        SNAPSHOT_RING_SIZE;
+    SnapshotSlot* slot = &g_snapshotRing[slotIndex];
+    if (!slot->valid || !slot->snapshot.valid) {
+        return false;
+    }
+
+    if (outSlot) {
+        *outSlot = slot;
+    }
+    if (outSlotIndex) {
+        *outSlotIndex = slotIndex;
+    }
+    return true;
+}
 
 static void ProcessPendingCommand() {
     LONG cmd = InterlockedExchange(&g_pendingCommand, static_cast<LONG>(PendingCommand::None));
     if (cmd == static_cast<LONG>(PendingCommand::None)) return;
 
     if (cmd == static_cast<LONG>(PendingCommand::Save)) {
-        bool ok = CaptureSnapshot(&g_snapshot);
+        const uint32_t slotIndex = g_nextWriteSlot.load(std::memory_order_acquire);
+        SnapshotSlot& slot = g_snapshotRing[slotIndex];
+        slot.valid = false;
+        slot.checksum = 0;
+        slot.frameCounter = 0;
+
+        bool ok = CaptureSnapshot(&slot.snapshot);
+        if (ok) {
+            slot.snapshot.frameCounter = g_frameBoundaryCount.load(std::memory_order_acquire);
+            slot.frameCounter = slot.snapshot.frameCounter;
+            slot.checksum = ChecksumSnapshot(slot.snapshot);
+            slot.valid = true;
+
+            const uint32_t storedCount = g_snapshotCount.load(std::memory_order_acquire);
+            if (storedCount < SNAPSHOT_RING_SIZE) {
+                g_snapshotCount.store(storedCount + 1, std::memory_order_release);
+            }
+            g_latestSnapshotSlot.store(static_cast<LONG>(slotIndex), std::memory_order_release);
+            g_nextWriteSlot.store((slotIndex + 1) % SNAPSHOT_RING_SIZE, std::memory_order_release);
+        }
         InterlockedExchange(&g_commandResult, ok ? 1 : -1);
         if (g_commandDoneEvent) SetEvent(g_commandDoneEvent);
     }
     else if (cmd == static_cast<LONG>(PendingCommand::Load)) {
-        bool ok = LoadSnapshot(g_snapshot);
+        const uint32_t framesAgo = static_cast<uint32_t>(InterlockedExchange(&g_pendingLoadFramesAgo, 0));
+        SnapshotSlot* slot = nullptr;
+        bool ok = false;
+        uint64_t loadMicros = 0;
+        if (ResolveSnapshotSlotForFramesAgo(framesAgo, &slot, nullptr)) {
+            const uint64_t startMicros = QueryPerformanceMicros();
+            ok = LoadSnapshot(slot->snapshot);
+            loadMicros = QueryPerformanceMicros() - startMicros;
+        }
+        g_lastLoadMicros.store(loadMicros, std::memory_order_release);
         InterlockedExchange(&g_commandResult, ok ? 1 : -1);
         if (g_commandDoneEvent) SetEvent(g_commandDoneEvent);
     }
@@ -131,6 +213,7 @@ static void* AllocateExecutableNear(uint64_t targetAddr, size_t size) {
 
 bool InstallFrameBoundaryHook() {
     if (g_hookInstalled.load()) return true;
+    InitializeSnapshotRingStorage();
 
     uint64_t callSite = _addr(ADDR_InputHook);
 
@@ -208,11 +291,47 @@ FrameCommandResult RequestSave() {
 }
 
 FrameCommandResult RequestLoad() {
+    return RequestLoadFramesAgo(0);
+}
+
+FrameCommandResult RequestLoadFramesAgo(uint32_t framesAgo) {
+    if (framesAgo >= SNAPSHOT_RING_SIZE) {
+        return FrameCommandResult::Failed;
+    }
+    InterlockedExchange(&g_pendingLoadFramesAgo, static_cast<LONG>(framesAgo));
     return IssueCommand(PendingCommand::Load);
 }
 
 const GameSnapshot& GetLastSnapshot() {
-    return g_snapshot;
+    SnapshotSlot* slot = nullptr;
+    if (!ResolveSnapshotSlotForFramesAgo(0, &slot, nullptr)) {
+        return g_emptySnapshot;
+    }
+    return slot->snapshot;
+}
+
+uint32_t GetStoredSnapshotCount() {
+    return g_snapshotCount.load(std::memory_order_acquire);
+}
+
+uint32_t GetSnapshotRingCapacity() {
+    return SNAPSHOT_RING_SIZE;
+}
+
+int32_t GetLastSnapshotSlotIndex() {
+    return static_cast<int32_t>(g_latestSnapshotSlot.load(std::memory_order_acquire));
+}
+
+uint64_t GetLastSnapshotChecksum() {
+    SnapshotSlot* slot = nullptr;
+    if (!ResolveSnapshotSlotForFramesAgo(0, &slot, nullptr)) {
+        return 0;
+    }
+    return slot->checksum;
+}
+
+uint64_t GetLastLoadMicros() {
+    return g_lastLoadMicros.load(std::memory_order_acquire);
 }
 
 // ---- Renderless frame advance ----

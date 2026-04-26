@@ -69,6 +69,10 @@ struct GameSnapshot {
     uint64_t captureMicros = 0;
 };
 
+// Reserve the common rollback buffers up front so repeated captures can
+// reuse memory instead of reallocating on every save.
+void PrepareSnapshotStorage(GameSnapshot* snapshot);
+
 // ---- Core API (maps to GGPO callbacks) ----
 
 // Resolve the 6 fighter pointers from sCharacter.
